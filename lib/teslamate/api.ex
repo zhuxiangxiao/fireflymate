@@ -18,6 +18,10 @@ defmodule TeslaMate.Api do
   @timeout :timer.minutes(2)
   @name __MODULE__
 
+  def provider do
+    System.get_env("VEHICLE_PROVIDER", "firefly") |> String.downcase()
+  end
+
   # API
 
   def start_link(opts) do
@@ -29,38 +33,68 @@ defmodule TeslaMate.Api do
   ## State
 
   def list_vehicles(name \\ @name) do
-    with {:ok, auth} <- fetch_auth(name) do
-      TeslaApi.Vehicle.list(auth)
-      |> handle_result(auth, name)
+    case provider() do
+      "firefly" ->
+        TeslaApi.Firefly.list()
+
+      _ ->
+        with {:ok, auth} <- fetch_auth(name) do
+          TeslaApi.Vehicle.list(auth)
+          |> handle_result(auth, name)
+        end
     end
   end
 
   def get_vehicle(name \\ @name, id) do
-    with {:ok, auth} <- fetch_auth(name) do
-      TeslaApi.Vehicle.get(auth, id)
-      |> handle_result(auth, name)
+    case provider() do
+      "firefly" ->
+        TeslaApi.Firefly.get(id)
+
+      _ ->
+        with {:ok, auth} <- fetch_auth(name) do
+          TeslaApi.Vehicle.get(auth, id)
+          |> handle_result(auth, name)
+        end
     end
   end
 
   def get_vehicle_with_state(name \\ @name, id) do
-    with {:ok, auth} <- fetch_auth(name) do
-      TeslaApi.Vehicle.get_with_state(auth, id)
-      |> handle_result(auth, name)
+    case provider() do
+      "firefly" ->
+        TeslaApi.Firefly.get_with_state(id)
+
+      _ ->
+        with {:ok, auth} <- fetch_auth(name) do
+          TeslaApi.Vehicle.get_with_state(auth, id)
+          |> handle_result(auth, name)
+        end
     end
   end
 
   def stream(name \\ @name, vid, receiver) do
-    with {:ok, %Auth{} = auth} <- fetch_auth(name) do
-      TeslaApi.Stream.start_link(auth: auth, vehicle_id: vid, receiver: receiver)
+    case provider() do
+      "firefly" ->
+        {:error, :not_supported}
+
+      _ ->
+        with {:ok, %Auth{} = auth} <- fetch_auth(name) do
+          TeslaApi.Stream.start_link(auth: auth, vehicle_id: vid, receiver: receiver)
+        end
     end
   end
 
   ## Internals
 
   def signed_in?(name \\ @name) do
-    case fetch_auth(name) do
-      {:error, :not_signed_in} -> false
-      {:ok, _} -> true
+    case provider() do
+      "firefly" ->
+        true
+
+      _ ->
+        case fetch_auth(name) do
+          {:error, :not_signed_in} -> false
+          {:ok, _} -> true
+        end
     end
   end
 
@@ -97,6 +131,13 @@ defmodule TeslaMate.Api do
       auth: Keyword.get(opts, :auth, TeslaMate.Auth),
       vehicles: Keyword.get(opts, :vehicles, Vehicles)
     }
+
+    if provider() == "firefly" do
+      case TeslaApi.Firefly.start_link() do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
 
     :ok =
       :fuse.install(
